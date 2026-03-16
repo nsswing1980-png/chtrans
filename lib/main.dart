@@ -223,13 +223,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         providerColor = Colors.black87;
         providerIcon = Icons.apple;
         break;
-      case AuthProvider.line:
-        providerColor = const Color(0xFF06C755);
-        providerIcon = Icons.chat_bubble;
-        break;
-      case AuthProvider.wechat:
-        providerColor = const Color(0xFF07C160);
-        providerIcon = Icons.wechat;
+      case AuthProvider.email:
+        providerColor = const Color(0xFF4A9B8E);
+        providerIcon = Icons.email_outlined;
         break;
       case AuthProvider.guest:
         providerColor = Colors.grey;

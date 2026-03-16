@@ -1,6 +1,6 @@
 // lib/models/user_profile.dart
 /// アカウント種別
-enum AuthProvider { google, apple, line, wechat, guest }
+enum AuthProvider { google, apple, email, guest }
 
 extension AuthProviderLabel on AuthProvider {
   String get label {
@@ -9,10 +9,8 @@ extension AuthProviderLabel on AuthProvider {
         return 'Google';
       case AuthProvider.apple:
         return 'Apple';
-      case AuthProvider.line:
-        return 'LINE';
-      case AuthProvider.wechat:
-        return 'WeChat';
+      case AuthProvider.email:
+        return 'メール';
       case AuthProvider.guest:
         return 'ゲスト';
     }
@@ -24,10 +22,8 @@ extension AuthProviderLabel on AuthProvider {
         return 'assets/icons/ic_google.png';
       case AuthProvider.apple:
         return 'assets/icons/ic_apple.png';
-      case AuthProvider.line:
-        return 'assets/icons/ic_line.png';
-      case AuthProvider.wechat:
-        return 'assets/icons/ic_wechat.png';
+      case AuthProvider.email:
+        return '';
       case AuthProvider.guest:
         return '';
     }
@@ -61,16 +57,24 @@ class UserProfile {
         'provider': provider.name,
       };
 
-  factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
-        uid: json['uid'] as String,
-        displayName: json['displayName'] as String,
-        email: json['email'] as String?,
-        photoUrl: json['photoUrl'] as String?,
-        provider: AuthProvider.values.firstWhere(
-          (e) => e.name == json['provider'],
-          orElse: () => AuthProvider.guest,
-        ),
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    // 旧データ互換: line/wechat → guest にフォールバック
+    AuthProvider prov;
+    try {
+      prov = AuthProvider.values.firstWhere(
+        (e) => e.name == json['provider'],
       );
+    } catch (_) {
+      prov = AuthProvider.guest;
+    }
+    return UserProfile(
+      uid: json['uid'] as String,
+      displayName: json['displayName'] as String,
+      email: json['email'] as String?,
+      photoUrl: json['photoUrl'] as String?,
+      provider: prov,
+    );
+  }
 
   /// ゲストユーザー
   static const UserProfile guest = UserProfile(

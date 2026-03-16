@@ -1,10 +1,10 @@
 // lib/services/auth_service.dart
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../models/user_profile.dart';
 
 class AuthService extends ChangeNotifier {
@@ -19,10 +19,6 @@ class AuthService extends ChangeNotifier {
   bool get isLoggedIn => _currentUser != null;
   bool get isLoading => _isLoading;
 
-  // Google Sign-In 設定
-  // Web プレビュー用：clientId は実際のプロジェクトでは Firebase Console から取得
-  // 本実装では Web でも Google サインインを試みるが、
-  // clientId 未設定環境ではゲストモードへフォールバックする
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
   );
@@ -32,7 +28,6 @@ class AuthService extends ChangeNotifier {
   Future<void> initialize() async {
     _isLoading = true;
     notifyListeners();
-
     try {
       final prefs = await SharedPreferences.getInstance();
       final userJson = prefs.getString('current_user');
@@ -43,7 +38,6 @@ class AuthService extends ChangeNotifier {
     } catch (e) {
       if (kDebugMode) debugPrint('AuthService init error: $e');
     }
-
     _isLoading = false;
     notifyListeners();
   }
@@ -56,7 +50,6 @@ class AuthService extends ChangeNotifier {
     try {
       GoogleSignInAccount? account;
       if (kIsWeb) {
-        // Web: popup サインイン
         account = await _googleSignIn.signInSilently();
         account ??= await _googleSignIn.signIn();
       } else {
@@ -103,15 +96,16 @@ class AuthService extends ChangeNotifier {
         ],
       );
 
-      final uid = 'apple_${credential.userIdentifier ?? DateTime.now().millisecondsSinceEpoch}';
-      final name = [
-        credential.givenName,
-        credential.familyName,
-      ].where((s) => s != null && s.isNotEmpty).join(' ');
+      final uid =
+          'apple_${credential.userIdentifier ?? DateTime.now().millisecondsSinceEpoch}';
+      final name = [credential.givenName, credential.familyName]
+          .where((s) => s != null && s.isNotEmpty)
+          .join(' ');
 
       final profile = UserProfile(
         uid: uid,
-        displayName: name.isNotEmpty ? name : (credential.email ?? 'Appleユーザー'),
+        displayName:
+            name.isNotEmpty ? name : (credential.email ?? 'Appleユーザー'),
         email: credential.email,
         provider: AuthProvider.apple,
       );
@@ -129,104 +123,103 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  // ========== LINE サインイン (OAuth 2.0) ==========
-  // LINE Login はブラウザ経由のため、簡易モックで「疑似ログイン」する。
-  // 本番実装では LINE Login API のコールバックを処理する必要がある。
+  // ========== メール + パスワード認証（端末ローカル保存） ==========
 
-  Future<UserProfile?> signInWithLine() async {
+  /// 新規登録
+  Future<({bool success, String? error})> registerWithEmail({
+    required String email,
+    required String password,
+    required String displayName,
+  }) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      // LINE Login URL を開く（実際の LINE チャネルIDが必要）
-      // ここでは LINE OAuth 2.0 エンドポイントに誘導するデモフローを実装
-      const lineClientId = 'YOUR_LINE_CHANNEL_ID'; // 本番では置き換え
-      const redirectUri = 'https://language-tutor.app/line-callback';
-      const state = 'random_state_string';
-      final lineUrl = Uri.parse(
-        'https://access.line.me/oauth2/v2.1/authorize'
-        '?response_type=code'
-        '&client_id=$lineClientId'
-        '&redirect_uri=${Uri.encodeComponent(redirectUri)}'
-        '&state=$state'
-        '&scope=profile%20openid%20email',
-      );
+      final prefs = await SharedPreferences.getInstance();
+      final emailKey = _emailStorageKey(email);
 
-      // このアプリではデモとして仮のLINEユーザーでログイン
-      // （実際の OAuth フローはアプリ側でコールバック URI ハンドリングが必要）
-      if (lineClientId == 'YOUR_LINE_CHANNEL_ID') {
-        // デモ：疑似LINEユーザーを作成
-        final profile = await _createDemoSocialUser(
-          AuthProvider.line,
-          '疑似LINEユーザー',
-        );
-        await _saveSession(profile);
-        _currentUser = profile;
+      // 既存アカウント確認
+      final existing = prefs.getString('email_account_$emailKey');
+      if (existing != null) {
         _isLoading = false;
         notifyListeners();
-        return profile;
+        return (success: false, error: 'このメールアドレスは既に登録済みです');
       }
 
-      // 本番実装：外部ブラウザでLINE OAuth を開く
-      if (await canLaunchUrl(lineUrl)) {
-        await launchUrl(lineUrl, mode: LaunchMode.externalApplication);
-      }
+      // パスワードをハッシュ化して保存
+      final hashedPw = _hashPassword(password);
+      final accountData = jsonEncode({
+        'email': email,
+        'passwordHash': hashedPw,
+        'displayName': displayName,
+      });
+      await prefs.setString('email_account_$emailKey', accountData);
 
+      final uid = 'email_${emailKey}';
+      final profile = UserProfile(
+        uid: uid,
+        displayName: displayName,
+        email: email,
+        provider: AuthProvider.email,
+      );
+
+      await _saveSession(profile);
+      _currentUser = profile;
       _isLoading = false;
       notifyListeners();
-      return null;
+      return (success: true, error: null);
     } catch (e) {
-      if (kDebugMode) debugPrint('LINE Sign-In error: $e');
       _isLoading = false;
       notifyListeners();
-      return null;
+      return (success: false, error: '登録に失敗しました: $e');
     }
   }
 
-  // ========== WeChat サインイン (OAuth 2.0) ==========
-
-  Future<UserProfile?> signInWithWeChat() async {
+  /// ログイン
+  Future<({bool success, String? error})> signInWithEmail({
+    required String email,
+    required String password,
+  }) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      const wechatAppId = 'YOUR_WECHAT_APP_ID'; // 本番では置き換え
+      final prefs = await SharedPreferences.getInstance();
+      final emailKey = _emailStorageKey(email);
+      final accountJson = prefs.getString('email_account_$emailKey');
 
-      if (wechatAppId == 'YOUR_WECHAT_APP_ID') {
-        // デモ：疑似WeChatユーザーを作成
-        final profile = await _createDemoSocialUser(
-          AuthProvider.wechat,
-          '疑似WeChatユーザー',
-        );
-        await _saveSession(profile);
-        _currentUser = profile;
+      if (accountJson == null) {
         _isLoading = false;
         notifyListeners();
-        return profile;
+        return (success: false, error: 'アカウントが見つかりません');
       }
 
-      // 本番実装：WeChatアプリ or ブラウザでOAuthを開く
-      final wechatUrl = Uri.parse(
-        'https://open.weixin.qq.com/connect/qrconnect'
-        '?appid=$wechatAppId'
-        '&scope=snsapi_login'
-        '&redirect_uri=${Uri.encodeComponent("https://language-tutor.app/wechat-callback")}'
-        '&state=random_state'
-        '#wechat_redirect',
+      final accountData = jsonDecode(accountJson) as Map<String, dynamic>;
+      final storedHash = accountData['passwordHash'] as String;
+      final hashedPw = _hashPassword(password);
+
+      if (storedHash != hashedPw) {
+        _isLoading = false;
+        notifyListeners();
+        return (success: false, error: 'パスワードが正しくありません');
+      }
+
+      final profile = UserProfile(
+        uid: 'email_$emailKey',
+        displayName: accountData['displayName'] as String,
+        email: email,
+        provider: AuthProvider.email,
       );
 
-      if (await canLaunchUrl(wechatUrl)) {
-        await launchUrl(wechatUrl, mode: LaunchMode.externalApplication);
-      }
-
+      await _saveSession(profile);
+      _currentUser = profile;
       _isLoading = false;
       notifyListeners();
-      return null;
+      return (success: true, error: null);
     } catch (e) {
-      if (kDebugMode) debugPrint('WeChat Sign-In error: $e');
       _isLoading = false;
       notifyListeners();
-      return null;
+      return (success: false, error: 'ログインに失敗しました: $e');
     }
   }
 
@@ -285,7 +278,6 @@ class AuthService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('current_user', jsonEncode(profile.toJson()));
 
-    // アカウント一覧に追加（重複防止）
     final accounts = await getSavedAccounts();
     final existingIndex = accounts.indexWhere((a) => a.uid == profile.uid);
     if (existingIndex >= 0) {
@@ -299,13 +291,14 @@ class AuthService extends ChangeNotifier {
     );
   }
 
-  Future<UserProfile> _createDemoSocialUser(
-      AuthProvider provider, String defaultName) async {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return UserProfile(
-      uid: '${provider.name}_demo_$timestamp',
-      displayName: defaultName,
-      provider: provider,
-    );
+  /// メールアドレスをストレージキー用に安全な文字列へ変換
+  String _emailStorageKey(String email) =>
+      email.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
+
+  /// パスワードのSHA-256ハッシュ（ソルト付き）
+  String _hashPassword(String password) {
+    const salt = 'language_tutor_salt_2024';
+    final bytes = utf8.encode('$salt:$password');
+    return sha256.convert(bytes).toString();
   }
 }
