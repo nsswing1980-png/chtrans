@@ -39,3 +39,5 @@ ios/Pods/
 *.log
 *.swp
 .DS_Store
+
+.github/workflows/
